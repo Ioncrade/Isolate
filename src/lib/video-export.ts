@@ -11,14 +11,13 @@ export function getVideoExportBitrate(width: number, height: number) {
 
 interface TransparentWebmOptions {
   clip: ClipMetadata
-  readFrame: (frameIndex: number) => Promise<ImageData>
   readMask: (frameIndex: number) => Promise<Uint8Array | null>
+  playSourceFrames: (
+    onFrame: (source: CanvasImageSource, mediaTime: number) => void | Promise<void>,
+    signal?: AbortSignal,
+  ) => Promise<number>
   onProgress?: (done: number, total: number) => void
   signal?: AbortSignal
-}
-
-function wait(milliseconds: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
 }
 
 export function compositeCutoutFrame(
@@ -43,10 +42,33 @@ function selectWebmMimeType() {
   ) ?? null
 }
 
+export function getMaskFrameIndex(mediaTime: number, clip: ClipMetadata) {
+  return Math.max(0, Math.min(clip.frameCount - 1, Math.round(mediaTime * clip.analysisFps)))
+}
+
+function writeMaskFrame(target: ImageData, mask: Uint8Array | null) {
+  for (let pixel = 0; pixel < target.width * target.height; pixel += 1) {
+    const offset = pixel * 4
+    target.data[offset] = 255
+    target.data[offset + 1] = 255
+    target.data[offset + 2] = 255
+    target.data[offset + 3] = mask?.[pixel] ?? 0
+  }
+}
+
+type MaskResult = { mask: Uint8Array | null; error?: never } | { mask?: never; error: unknown }
+
+function settleMask(mask: Promise<Uint8Array | null>): Promise<MaskResult> {
+  return mask.then(
+    (value) => ({ mask: value }),
+    (error: unknown) => ({ error }),
+  )
+}
+
 export async function createTransparentWebm({
   clip,
-  readFrame,
   readMask,
+  playSourceFrames,
   onProgress,
   signal,
 }: TransparentWebmOptions) {
@@ -66,10 +88,32 @@ export async function createTransparentWebm({
     throw new Error('Canvas video export is unavailable in this browser.')
   }
 
-  const [firstFrame, firstMask] = await Promise.all([readFrame(0), readMask(0)])
-  const outputFrame = compositeCutoutFrame(firstFrame, firstMask)
-  context.clearRect(0, 0, canvas.width, canvas.height)
-  context.putImageData(outputFrame, 0, 0)
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = clip.workingWidth
+  maskCanvas.height = clip.workingHeight
+  const maskContext = maskCanvas.getContext('2d')
+  if (!maskContext) throw new Error('Canvas mask composition is unavailable in this browser.')
+  const maskFrame = maskContext.createImageData(maskCanvas.width, maskCanvas.height)
+  let activeMaskIndex = 0
+  writeMaskFrame(maskFrame, await readMask(activeMaskIndex))
+  maskContext.putImageData(maskFrame, 0, 0)
+  let prefetchedMask = clip.frameCount > 1
+    ? { index: 1, result: settleMask(readMask(1)) }
+    : null
+
+  const activateMask = async (maskIndex: number) => {
+    const result = prefetchedMask?.index === maskIndex
+      ? await prefetchedMask.result
+      : await settleMask(readMask(maskIndex))
+    if ('error' in result) throw result.error
+    writeMaskFrame(maskFrame, result.mask)
+    maskContext.putImageData(maskFrame, 0, 0)
+    activeMaskIndex = maskIndex
+    const nextIndex = maskIndex + 1
+    prefetchedMask = nextIndex < clip.frameCount
+      ? { index: nextIndex, result: settleMask(readMask(nextIndex)) }
+      : null
+  }
 
   const stream = canvas.captureStream(0)
   const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void }
@@ -103,24 +147,21 @@ export async function createTransparentWebm({
 
   try {
     recorder.start(1000)
-    const startedAt = performance.now()
-    track.requestFrame?.()
-    onProgress?.(1, clip.frameCount)
-
-    for (let frameIndex = 1; frameIndex < clip.frameCount; frameIndex += 1) {
+    const encodedFrameCount = await playSourceFrames(async (source, mediaTime) => {
       if (signal?.aborted) throw new DOMException('Video export cancelled.', 'AbortError')
       if (recordingError) throw recordingError
-      const [frame, mask] = await Promise.all([readFrame(frameIndex), readMask(frameIndex)])
-      compositeCutoutFrame(frame, mask, outputFrame)
-      const targetTime = startedAt + (frameIndex / clip.analysisFps) * 1000
-      await wait(Math.max(0, targetTime - performance.now()))
+      const maskIndex = getMaskFrameIndex(mediaTime, clip)
+      if (maskIndex !== activeMaskIndex) {
+        await activateMask(maskIndex)
+      }
       context.clearRect(0, 0, canvas.width, canvas.height)
-      context.putImageData(outputFrame, 0, 0)
+      context.drawImage(source, 0, 0, canvas.width, canvas.height)
+      context.globalCompositeOperation = 'destination-in'
+      context.drawImage(maskCanvas, 0, 0)
+      context.globalCompositeOperation = 'source-over'
       track.requestFrame?.()
-      onProgress?.(frameIndex + 1, clip.frameCount)
-    }
-
-    await wait(Math.max(0, startedAt + clip.duration * 1000 - performance.now()))
+      onProgress?.(Math.min(mediaTime, clip.duration), clip.duration)
+    }, signal)
 
     if (recorder.state === 'recording') recorder.stop()
     await stopped
@@ -128,7 +169,12 @@ export async function createTransparentWebm({
     const recording = new Blob(chunks, { type: mimeType })
     if (!recording.size) throw new Error('The browser produced an empty WebM video.')
     const blob = await fixWebmDuration(recording, clip.duration * 1000, { logger: false })
-    return { blob, mimeType }
+    return {
+      blob,
+      mimeType,
+      frameCount: encodedFrameCount,
+      frameRate: encodedFrameCount / clip.duration,
+    }
   } catch (error) {
     if (recorder.state === 'recording') recorder.stop()
     await stopped

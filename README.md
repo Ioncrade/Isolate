@@ -14,7 +14,7 @@ The application is entirely client-side. Vercel serves static files, but video d
 6. **Restore mask resolution.** SAM2's result is post-processed to the current working-frame dimensions. This preserves a 2K output canvas without claiming native 2K neural detail.
 7. **Propagate sequentially.** Points sampled from the previous mask guide the next frame. Forward, backward, and bidirectional passes are cancellable between frames.
 8. **Persist completed masks.** Each alpha mask is compressed to PNG and written to IndexedDB before processing continues.
-9. **Export the cutout.** Original-color pixels are combined with the stored alpha mask on a reused canvas and recorded as a silent transparent VP9 or VP8 WebM.
+9. **Export the cutout.** Each source-timed video frame is combined with its nearest stored alpha mask on reused canvases and recorded as a silent transparent VP9 or VP8 WebM. This preserves the uploaded clip's presentation cadence without storing more SAM2 masks.
 
 ```mermaid
 flowchart LR
@@ -67,7 +67,7 @@ Temporary preprocessing, RGB conversion, ONNX tensors, model weights, GPU resour
 - PNG masks have a **64 MB per-project IndexedDB ceiling**.
 - The original video is referenced through a revocable object URL and is not copied into IndexedDB.
 - Project metadata and frame states are stored separately from the source video.
-- Export reuses one canvas and one output-frame buffer rather than accumulating raw frames.
+- Export reuses output and alpha canvases rather than accumulating decoded source frames.
 - MediaRecorder chunks are retained only until the WebM is finalized, with a **64 MB compressed-output ceiling**.
 - The model's browser cache is managed by the browser and is separate from the mask-cache limit.
 
@@ -83,7 +83,7 @@ Temporary preprocessing, RGB conversion, ONNX tensors, model weights, GPU resour
 | Analysis | 6–8 FPS, no more than 200 frames |
 | Mask cache | 64 MB per local project |
 | Video export | 4–12 Mbps, maximum 64 MB |
-| Output | Silent transparent WebM |
+| Output | Silent transparent WebM at the browser-presented source cadence |
 
 ## Browser and media support
 

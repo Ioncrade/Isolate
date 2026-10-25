@@ -462,19 +462,20 @@ export function App() {
     if (!clip || generatedMaskCount === 0) return
     setError('')
     setPhase('exporting')
-    setExportProgress({ done: 0, total: clip.frameCount })
-    setStatus('Rendering a transparent WebM locally. Keep this tab visible…')
+    setExportProgress({ done: 0, total: clip.duration })
+    setStatus('Rendering the transparent WebM at the source video cadence. Keep this tab visible…')
     const controller = new AbortController()
     exportAbortRef.current = controller
     try {
-      const { blob } = await createTransparentWebm({
+      const { blob, frameRate } = await createTransparentWebm({
         clip,
-        readFrame: (frameIndex) => readerRef.current!.readFrame(frameIndex),
         readMask: (frameIndex) => readStoredMask(frameIndex, clip),
+        playSourceFrames: (onFrame, signal) =>
+          readerRef.current!.playSourceFrames(onFrame, signal),
         signal: controller.signal,
         onProgress: (done, total) => {
           setExportProgress({ done, total })
-          setStatus(`Encoding transparent frame ${done} of ${total}…`)
+          setStatus(`Encoding transparent video… ${Math.round((done / total) * 100)}%`)
         },
       })
       const url = URL.createObjectURL(blob)
@@ -484,7 +485,7 @@ export function App() {
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 2000)
       setStatus(
-        `Transparent WebM downloaded · ${clip.workingWidth} × ${clip.workingHeight} · ${formatBytes(blob.size)} · ${clip.analysisFps} fps.`,
+        `Transparent WebM downloaded · ${clip.workingWidth} × ${clip.workingHeight} · ${formatBytes(blob.size)} · ${frameRate.toFixed(2)} average fps.`,
       )
       setPhase('ready')
     } catch (caught) {
@@ -916,7 +917,7 @@ export function App() {
                   <div>
                     <strong>Transparent WebM</strong>
                     <span>
-                      {clip.workingWidth} × {clip.workingHeight} · {generatedMaskCount}/{clip.frameCount} masked frames · silent · {clip.analysisFps} fps
+                      {clip.workingWidth} × {clip.workingHeight} · {generatedMaskCount}/{clip.frameCount} masks · silent · source cadence
                     </span>
                   </div>
                 </div>
@@ -943,7 +944,7 @@ export function App() {
                     <span style={{ width: `${(exportProgress.done / exportProgress.total) * 100}%` }} />
                   </div>
                 )}
-                <p className="field-help">Original color is retained inside the mask. Unmasked frames remain fully transparent.</p>
+                <p className="field-help">Original color and source frame cadence are retained. The nearest stored mask is applied to each source frame.</p>
               </section>
 
               <button

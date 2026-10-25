@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { compositeCutoutFrame, getVideoExportBitrate } from './video-export'
+import { compositeCutoutFrame, getMaskFrameIndex, getVideoExportBitrate } from './video-export'
+import type { ClipMetadata } from '../types'
 
 describe('compositeCutoutFrame', () => {
   it('keeps source colors and replaces alpha with the mask', () => {
@@ -41,5 +42,20 @@ describe('getVideoExportBitrate', () => {
     expect(getVideoExportBitrate(1920, 1080)).toBe(8_000_000)
     expect(getVideoExportBitrate(2560, 1440)).toBeGreaterThan(10_000_000)
     expect(getVideoExportBitrate(7680, 4320)).toBe(12_000_000)
+  })
+})
+
+describe('getMaskFrameIndex', () => {
+  const clip = {
+    duration: 20,
+    analysisFps: 8,
+    frameCount: 160,
+  } as ClipMetadata
+
+  it('maps source-timed frames to the nearest bounded analysis mask', () => {
+    expect(getMaskFrameIndex(0, clip)).toBe(0)
+    expect(getMaskFrameIndex(1 / 30, clip)).toBe(0)
+    expect(getMaskFrameIndex(0.1, clip)).toBe(1)
+    expect(getMaskFrameIndex(30, clip)).toBe(159)
   })
 })

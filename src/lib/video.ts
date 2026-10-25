@@ -99,6 +99,73 @@ export class VideoFrameReader {
     return this.context.getImageData(0, 0, this.canvas.width, this.canvas.height)
   }
 
+  async playSourceFrames(
+    onFrame: (source: CanvasImageSource, mediaTime: number) => void | Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    if (!this.metadata) throw new Error('No clip is open.')
+    if (typeof this.video.requestVideoFrameCallback !== 'function') {
+      throw new Error('This browser cannot preserve the source video frame rate during export.')
+    }
+    if (signal?.aborted) throw new DOMException('Video export cancelled.', 'AbortError')
+
+    if (Math.abs(this.video.currentTime) > 0.001) {
+      const ready = waitForEvent(this.video, 'seeked')
+      this.video.currentTime = 0
+      await ready
+    }
+
+    return new Promise<number>((resolve, reject) => {
+      let callbackId: number | null = null
+      let frameCount = 0
+      let processing = false
+      let ended = false
+      let settled = false
+
+      const cleanup = () => {
+        this.video.pause()
+        if (callbackId !== null) this.video.cancelVideoFrameCallback(callbackId)
+        this.video.removeEventListener('ended', onEnded)
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const finish = (error?: unknown) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (error) reject(error)
+        else resolve(frameCount)
+      }
+      const onAbort = () => finish(new DOMException('Video export cancelled.', 'AbortError'))
+      const onEnded = () => {
+        ended = true
+        if (!processing) finish()
+      }
+      const scheduleFrame = () => {
+        callbackId = this.video.requestVideoFrameCallback(async (_now, metadata) => {
+          callbackId = null
+          processing = true
+          try {
+            if (signal?.aborted) throw new DOMException('Video export cancelled.', 'AbortError')
+            await onFrame(this.video, metadata.mediaTime)
+            frameCount += 1
+          } catch (error) {
+            finish(error)
+            return
+          } finally {
+            processing = false
+          }
+          if (ended || this.video.ended) finish()
+          else scheduleFrame()
+        })
+      }
+
+      this.video.addEventListener('ended', onEnded)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      scheduleFrame()
+      void this.video.play().catch(finish)
+    })
+  }
+
   close() {
     this.video.pause()
     this.video.removeAttribute('src')

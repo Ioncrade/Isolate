@@ -1,5 +1,5 @@
 import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { PromptLabel, PromptPoint } from '../types'
 import {
@@ -7,6 +7,7 @@ import {
   MIN_VIEW_ZOOM,
   clampViewPan,
   clampViewZoom,
+  containViewSize,
   zoomAroundPoint,
 } from '../lib/viewport'
 
@@ -27,6 +28,7 @@ interface ViewState {
 }
 
 const DEFAULT_VIEW: ViewState = { zoom: 1, x: 0, y: 0 }
+const EMPTY_FIT = { width: 0, height: 0 }
 
 export function CanvasViewer({
   frame,
@@ -46,21 +48,21 @@ export function CanvasViewer({
   const [spaceHeld, setSpaceHeld] = useState(false)
   const [panning, setPanning] = useState(false)
   const [view, setView] = useState<ViewState>(DEFAULT_VIEW)
+  const [fitSize, setFitSize] = useState(EMPTY_FIT)
 
   const constrainView = useCallback((candidate: ViewState): ViewState => {
     const viewport = viewportRef.current
-    const canvas = canvasRef.current
-    if (!viewport || !canvas) return candidate
+    if (!viewport || !fitSize.width || !fitSize.height) return candidate
     const pan = clampViewPan(
       candidate,
       candidate.zoom,
-      canvas.offsetWidth,
-      canvas.offsetHeight,
+      fitSize.width,
+      fitSize.height,
       viewport.clientWidth,
       viewport.clientHeight,
     )
     return { zoom: candidate.zoom, ...pan }
-  }, [])
+  }, [fitSize])
 
   const setZoom = useCallback((requestedZoom: number, anchor = { x: 0, y: 0 }) => {
     setView((current) => {
@@ -159,10 +161,33 @@ export function CanvasViewer({
     setKeyboardCursor({ x: Math.round(frame.width / 2), y: Math.round(frame.height / 2) })
   }, [frame, resetView])
 
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport || !frame) {
+      setFitSize(EMPTY_FIT)
+      return
+    }
+    const updateFit = () => {
+      const next = containViewSize(
+        frame.width,
+        frame.height,
+        viewport.clientWidth,
+        viewport.clientHeight,
+      )
+      setFitSize((current) =>
+        Math.abs(current.width - next.width) < 0.1 && Math.abs(current.height - next.height) < 0.1
+          ? current
+          : next,
+      )
+    }
+    updateFit()
+    const observer = new ResizeObserver(updateFit)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [frame])
+
   useEffect(() => {
-    const onResize = () => setView((current) => constrainView(current))
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    setView((current) => constrainView(current))
   }, [constrainView])
 
   useEffect(() => {
@@ -283,7 +308,11 @@ export function CanvasViewer({
       <canvas
         ref={canvasRef}
         className="frame-canvas"
-        style={{ transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})` }}
+        style={{
+          width: fitSize.width ? `${fitSize.width}px` : 0,
+          height: fitSize.height ? `${fitSize.height}px` : 0,
+          transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`,
+        }}
         tabIndex={disabled ? -1 : 0}
         draggable={false}
         aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter"

@@ -6,6 +6,32 @@ export interface ViewOffset {
   y: number
 }
 
+export interface ViewSize {
+  width: number
+  height: number
+}
+
+export function containViewSize(
+  contentWidth: number,
+  contentHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): ViewSize {
+  if (
+    contentWidth <= 0 ||
+    contentHeight <= 0 ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return { width: 0, height: 0 }
+  }
+  const scale = Math.min(viewportWidth / contentWidth, viewportHeight / contentHeight)
+  return {
+    width: contentWidth * scale,
+    height: contentHeight * scale,
+  }
+}
+
 export function clampViewZoom(zoom: number) {
   return Math.max(MIN_VIEW_ZOOM, Math.min(MAX_VIEW_ZOOM, zoom))
 }

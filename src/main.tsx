@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Analytics } from '@vercel/analytics/react'
 import { App } from './App'
 import { LandingPage } from './LandingPage'
 import './styles.css'
@@ -30,7 +31,12 @@ function Root() {
     document.title = studio ? 'Isolate — Local mask studio' : 'Isolate — Private browser rotoscoping'
   }, [studio])
 
-  return studio ? <App /> : <LandingPage />
+  return (
+    <>
+      {studio ? <App /> : <LandingPage />}
+      <Analytics />
+    </>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(<Root />)
